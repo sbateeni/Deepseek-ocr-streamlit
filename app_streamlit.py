@@ -15,49 +15,120 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# عناوين API محتملة لـ DeepSeek OCR
-DEFAULT_API_URL = "https://api-inference.huggingface.co/models/deepseek-ai/deepseek-ocr"
-
-# نماذج OCR بديلة إذا كان النموذج الأساسي غير متاح
-ALTERNATE_MODELS = {
-    "DeepSeek OCR": "https://api-inference.huggingface.co/models/deepseek-ai/deepseek-ocr",
-    "Microsoft TrOCR": "https://api-inference.huggingface.co/models/microsoft/trocr-base-printed",
-    "Google T5 OCR": "https://api-inference.huggingface.co/models/microsoft/trocr-base-handwritten",
+# نماذج OCR محتملة
+OCR_MODELS = {
+    "DeepSeek OCR": "deepseek-ai/deepseek-ocr",
+    "Microsoft TrOCR Printed": "microsoft/trocr-base-printed",
+    "Microsoft TrOCR Handwritten": "microsoft/trocr-base-handwritten",
+    "Donut OCR": "naver-clova-ix/donut-base-finetuned-cord-v2",
+    "PaddleOCR": "paddlepaddle/paddleocr",
 }
 
 def init_session_state():
     """تهيئة حالة الجلسة"""
     if 'hf_token' not in st.session_state:
         st.session_state.hf_token = ""
-    if 'api_url' not in st.session_state:
-        st.session_state.api_url = DEFAULT_API_URL
     if 'selected_model' not in st.session_state:
         st.session_state.selected_model = "DeepSeek OCR"
+    if 'api_status' not in st.session_state:
+        st.session_state.api_status = "غير معروف"
+    if 'model_ready' not in st.session_state:
+        st.session_state.model_ready = False
 
-def save_api_config():
-    """حفظ إعدادات API في session state"""
-    st.session_state.hf_token = st.session_state.hf_token_input
-    st.session_state.api_url = st.session_state.api_url_input
-    st.session_state.selected_model = st.session_state.model_selector
+def get_api_url(model_name):
+    """الحصول على عنوان API للنموذج المحدد"""
+    model_id = OCR_MODELS.get(model_name, "deepseek-ai/deepseek-ocr")
+    return f"https://api-inference.huggingface.co/models/{model_id}"
 
-def query_deepseek_ocr(image_bytes):
+def check_model_status():
+    """فحص حالة النموذج وAPI"""
+    if not st.session_state.hf_token:
+        return {"error": "⚠️ يرجى إدخال Hugging Face Token أولاً"}
+    
+    model_id = OCR_MODELS.get(st.session_state.selected_model, "deepseek-ai/deepseek-ocr")
+    api_url = f"https://huggingface.co/api/models/{model_id}"
+    
+    try:
+        # فحص وجود النموذج
+        response = requests.get(api_url, timeout=10)
+        
+        if response.status_code == 200:
+            model_info = response.json()
+            
+            # فحص إذا كان النموذج متاحاً على Inference API
+            headers = {"Authorization": f"Bearer {st.session_state.hf_token}"}
+            inference_url = get_api_url(st.session_state.selected_model)
+            
+            # محاولة استدعاء بسيط لفحص حالة النموذج
+            test_response = requests.get(
+                f"https://api-inference.huggingface.co/status/{model_id}",
+                headers=headers,
+                timeout=10
+            )
+            
+            if test_response.status_code == 200:
+                status_info = test_response.json()
+                loaded = status_info.get('loaded', False)
+                state = status_info.get('state', 'Unknown')
+                
+                return {
+                    "status": "success",
+                    "model_exists": True,
+                    "model_ready": loaded,
+                    "model_state": state,
+                    "model_name": model_info.get('modelId', ''),
+                    "downloads": model_info.get('downloads', 0)
+                }
+            else:
+                return {
+                    "status": "warning",
+                    "model_exists": True,
+                    "model_ready": False,
+                    "model_state": "غير معروف",
+                    "message": "النموذج موجود ولكن لا يمكن الوصول له عبر API"
+                }
+                
+        elif response.status_code == 404:
+            return {
+                "status": "error",
+                "model_exists": False,
+                "message": "النموذج غير موجود على Hugging Face"
+            }
+        else:
+            return {
+                "status": "error", 
+                "model_exists": False,
+                "message": f"خطأ في التحقق: {response.status_code}"
+            }
+            
+    except requests.exceptions.Timeout:
+        return {"status": "error", "message": "انتهت مهلة الاتصال"}
+    except Exception as e:
+        return {"status": "error", "message": f"خطأ في التحقق: {str(e)}"}
+
+def query_ocr_api(image_bytes):
     """دالة لإرسال الصورة إلى OCR API"""
     if not st.session_state.hf_token:
         return {"error": "⚠️ يرجى إدخال Hugging Face Token أولاً"}
     
     headers = {"Authorization": f"Bearer {st.session_state.hf_token}"}
+    api_url = get_api_url(st.session_state.selected_model)
     
     try:
-        response = requests.post(st.session_state.api_url, headers=headers, data=image_bytes, timeout=60)
+        response = requests.post(api_url, headers=headers, data=image_bytes, timeout=60)
         
         if response.status_code == 200:
             return response.json()
         elif response.status_code == 503:
+            # محاولة تحميل النموذج
+            load_response = requests.post(api_url, headers=headers, json={"inputs": ""}, timeout=30)
+            if load_response.status_code == 200:
+                return {"error": "النموذج كان قيد التحميل، يرجى المحاولة مرة أخرى"}
             return {"error": "النموذج قيد التحميل، يرجى المحاولة مرة أخرى بعد 10-20 ثانية"}
         elif response.status_code == 401:
             return {"error": "Token غير صالح أو منتهي الصلاحية"}
         elif response.status_code == 404:
-            return {"error": "النموذج غير موجود. جرب نموذجاً آخر من القائمة."}
+            return {"error": "النموذج غير موجود على Inference API"}
         elif response.status_code == 429:
             return {"error": "تم تجاوز الحد المسموح. حاول مرة أخرى لاحقاً."}
         else:
@@ -71,24 +142,22 @@ def query_deepseek_ocr(image_bytes):
 def pdf_to_images(pdf_file):
     """تحويل PDF إلى قائمة من الصور"""
     try:
-        # حفظ الملف المؤقت
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
             tmp_file.write(pdf_file.getvalue())
             tmp_path = tmp_file.name
         
-        # فتح PDF باستخدام PyMuPDF
         doc = fitz.open(tmp_path)
         images = []
         
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # زيادة الدقة
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
             img_data = pix.tobytes("ppm")
             img = Image.open(io.BytesIO(img_data))
             images.append(img)
         
         doc.close()
-        os.unlink(tmp_path)  # حذف الملف المؤقت
+        os.unlink(tmp_path)
         return images
         
     except Exception as e:
@@ -109,34 +178,62 @@ with st.sidebar:
         value=st.session_state.hf_token,
         key="hf_token_input",
         type="password",
-        help="احصل على Token من: https://huggingface.co/settings/tokens",
-        on_change=save_api_config
+        help="احصل على Token من: https://huggingface.co/settings/tokens"
     )
     
     # اختيار النموذج
     st.subheader("🤖 اختيار النموذج")
-    st.selectbox(
+    selected_model = st.selectbox(
         "اختر نموذج OCR",
-        options=list(ALTERNATE_MODELS.keys()),
-        key="model_selector",
-        index=list(ALTERNATE_MODELS.keys()).index(st.session_state.selected_model),
-        on_change=save_api_config,
-        help="إذا لم يعمل نموذج DeepSeek، جرب نماذج أخرى"
+        options=list(OCR_MODELS.keys()),
+        index=list(OCR_MODELS.keys()).index(st.session_state.selected_model),
+        help="اختر النموذج المناسب لنوع النص المطلوب"
     )
     
-    # إدخال عنوان API مخصص
-    st.subheader("🌐 عنوان API مخصص")
-    st.text_input(
-        "أدخل عنوان API مخصص (اختياري)",
-        value=st.session_state.api_url,
-        key="api_url_input",
-        help=f"اتركه فارغاً للاستخدام الافتراضي",
-        on_change=save_api_config
-    )
+    # تحديث النموذج المختار
+    if selected_model != st.session_state.selected_model:
+        st.session_state.selected_model = selected_model
+        st.session_state.api_status = "غير معروف"
+        st.session_state.model_ready = False
     
-    # تحديث عنوان API بناءً على النموذج المختار
-    if st.session_state.selected_model in ALTERNATE_MODELS:
-        st.session_state.api_url = ALTERNATE_MODELS[st.session_state.selected_model]
+    st.markdown("---")
+    
+    # فحص حالة API
+    st.subheader("🔍 فحص حالة النموذج")
+    
+    if st.button("📡 فحص حالة النموذج", use_container_width=True):
+        if st.session_state.hf_token:
+            with st.spinner("جاري فحص حالة النموذج..."):
+                status_result = check_model_status()
+                
+            if status_result["status"] == "success":
+                st.success("✅ النموذج متاح وجاهز للاستخدام")
+                st.session_state.api_status = "نشط"
+                st.session_state.model_ready = True
+                
+                # عرض معلومات إضافية
+                with st.expander("معلومات النموذج"):
+                    st.write(f"**اسم النموذج:** {status_result.get('model_name', '')}")
+                    st.write(f"**الحالة:** {status_result.get('model_state', '')}")
+                    st.write(f"**عدد التحميلات:** {status_result.get('downloads', 0)}")
+                    
+            elif status_result["status"] == "warning":
+                st.warning("⚠️ النموذج موجود ولكن قد لا يكون جاهزاً")
+                st.session_state.api_status = "تحذير"
+                st.session_state.model_ready = False
+                st.info(status_result.get("message", ""))
+                
+            else:
+                st.error("❌ مشكلة في النموذج")
+                st.session_state.api_status = "خطأ"
+                st.session_state.model_ready = False
+                st.error(status_result.get("message", ""))
+        else:
+            st.error("⚠️ يرجى إدخال Token أولاً")
+    
+    # عرض حالة النموذج الحالية
+    if st.session_state.api_status != "غير معروف":
+        st.metric("حالة النموذج", st.session_state.api_status)
     
     st.markdown("---")
     
@@ -150,7 +247,7 @@ with st.sidebar:
     
     # زر مسح الإعدادات
     if st.button("🗑️ مسح الإعدادات", use_container_width=True):
-        for key in ['hf_token', 'api_url', 'selected_model']:
+        for key in ['hf_token', 'selected_model', 'api_status', 'model_ready']:
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()
@@ -159,9 +256,18 @@ with st.sidebar:
 st.title("🔍 DeepSeek OCR - استخراج النص من الصور وPDF")
 st.write("رفع صورة أو ملف PDF لاستخراج النص باستخدام نماذج OCR")
 
-# عرض النموذج المختار
-if st.session_state.get('selected_model'):
-    st.info(f"**النموذج المختار:** {st.session_state.selected_model}")
+# عرض معلومات النموذج
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.info(f"**النموذج:** {st.session_state.selected_model}")
+with col2:
+    status_color = "🟢" if st.session_state.api_status == "نشط" else "🟡" if st.session_state.api_status == "تحذير" else "🔴"
+    st.info(f"**الحالة:** {status_color} {st.session_state.api_status}")
+with col3:
+    if st.session_state.hf_token:
+        st.success("🔑 Token متوفر")
+    else:
+        st.error("🔑 Token غير متوفر")
 
 # التحقق من إدخال Token
 if not st.session_state.hf_token:
@@ -178,6 +284,9 @@ with st.container():
     )
 
 if uploaded_file is not None and st.session_state.hf_token:
+    if not st.session_state.model_ready:
+        st.warning("⚠️ يرجى فحص حالة النموذج أولاً للتأكد من أنه جاهز للاستخدام")
+    
     if uploaded_file.type == "application/pdf":
         # معالجة ملف PDF
         st.info("📄 تم رفع ملف PDF - جاري التحويل إلى صور...")
@@ -198,18 +307,17 @@ if uploaded_file is not None and st.session_state.hf_token:
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    # التحديث: استخدام use_container_width بدلاً من use_column_width
                     st.image(img, use_container_width=True, caption=f"الصفحة {i+1}")
                 
                 with col2:
-                    if st.button(f"استخراج النص من الصفحة {i+1}", key=f"btn_{i}"):
+                    if st.button(f"استخراج النص من الصفحة {i+1}", key=f"btn_{i}", 
+                               disabled=not st.session_state.model_ready):
                         with st.spinner(f"جاري معالجة الصفحة {i+1}..."):
-                            # تحويل الصورة إلى bytes
                             img_bytes = io.BytesIO()
                             img.save(img_bytes, format='PNG')
                             img_bytes = img_bytes.getvalue()
                             
-                            result = query_deepseek_ocr(img_bytes)
+                            result = query_ocr_api(img_bytes)
                         
                         if "error" in result:
                             st.error(f"❌ {result['error']}")
@@ -227,13 +335,11 @@ if uploaded_file is not None and st.session_state.hf_token:
                                     )
                                     all_extracted_text.append(f"--- الصفحة {i+1} ---\n{extracted_text}\n")
             
-            # عرض كل النصوص معاً
             if all_extracted_text:
                 st.subheader("📝 كل النصوص المستخرجة")
                 full_text = "\n".join(all_extracted_text)
                 st.text_area("النص الكامل", full_text, height=300)
                 
-                # تحميل النص كملف
                 st.download_button(
                     label="📥 تحميل النص كملف",
                     data=full_text,
@@ -249,24 +355,23 @@ if uploaded_file is not None and st.session_state.hf_token:
         with col1:
             st.subheader("الصورة المرفوعة")
             image = Image.open(uploaded_file)
-            # التحديث: استخدام use_container_width بدلاً من use_column_width
             st.image(image, use_container_width=True)
         
         with col2:
             st.subheader("النتائج")
-            if st.button("🎯 استخراج النص", type="primary", use_container_width=True):
+            if st.button("🎯 استخراج النص", type="primary", use_container_width=True,
+                       disabled=not st.session_state.model_ready):
                 with st.spinner("جاري معالجة الصورة وتحليل النص..."):
                     img_bytes = uploaded_file.getvalue()
-                    result = query_deepseek_ocr(img_bytes)
+                    result = query_ocr_api(img_bytes)
                 
                 if "error" in result:
                     st.error(f"❌ {result['error']}")
                     
-                    # اقتراحات استكشاف الأخطاء
                     if "غير موجود" in result["error"]:
-                        st.info("💡 **حل مقترح:** جرب تغيير النموذج من القائمة في الشريط الجانبي")
+                        st.info("💡 **الحل:** جرب نموذجاً مختلفاً أو تحقق من حالة النموذج")
                     elif "قيد التحميل" in result["error"]:
-                        st.info("💡 **حل مقترح:** انتظر 20 ثانية ثم حاول مرة أخرى")
+                        st.info("💡 **الحل:** انتظر 30 ثانية ثم حاول مرة أخرى")
                         
                 else:
                     st.success("✅ تم استخراج النص بنجاح!")
@@ -276,7 +381,6 @@ if uploaded_file is not None and st.session_state.hf_token:
                         if extracted_text:
                             st.text_area("النص المستخرج", extracted_text, height=200)
                             
-                            # تحميل النص كملف
                             st.download_button(
                                 label="📥 تحميل النص",
                                 data=extracted_text,
@@ -285,41 +389,33 @@ if uploaded_file is not None and st.session_state.hf_token:
                                 use_container_width=True
                             )
 
-# قسم التعليمات
-with st.expander("📚 تعليمات الاستخدام واستكشاف الأخطاء"):
+# قسم استكشاف الأخطاء
+with st.expander("🛠️ استكشاف الأخطاء والإصلاح"):
     st.markdown("""
-    ### 🚀 كيفية الاستخدام:
-    1. **أدخل Hugging Face Token** في الشريط الجانبي
-    2. **اختر نموذج OCR** من القائمة
-    3. **اختر ملف** (صورة أو PDF)
-    4. **انقر على استخراج النص**
-    5. **انسخ أو حمّل** النتائج
-
-    ### 🔑 الحصول على Token:
-    1. اذهب إلى [Hugging Face Settings](https://huggingface.co/settings/tokens)
-    2. سجّل الدخول بحسابك
-    3. أنشئ Token جديد (Role: Write)
-    4. انسخه وأدخله في التطبيق
-
-    ### 🛠️ استكشاف الأخطاء:
+    ### 🔍 إذا لم تعمل أي نماذج:
     
-    **"النموذج غير موجود":**
-    - جرب نموذجاً آخر من القائمة
-    - تأكد من كتابة عنوان API بشكل صحيح
+    1. **تحقق من صحة Token:**
+       - تأكد من أن Token صالح ولم ينتهي
+       - تأكد من أن لديك صلاحيات كافية
     
-    **"النموذج قيد التحميل":**
-    - انتظر 20-30 ثانية
-    - حاول مرة أخرى
+    2. **جرب نماذج مختلفة:**
+       - كل نموذج مخصص لنوع معين من النصوص
+       - بعض النماذج تحتاج وقت للتحميل أول مرة
     
-    **"Token غير صالح":**
-    - تأكد من صحة Token
-    - أنشئ Token جديد
+    3. **تحقق من حالة النموذج:**
+       - استخدم زر "فحص حالة النموذج"
+       - إذا كان النموذج غير جاهز، انتظر دقيقة وحاول مرة أخرى
     
-    **📁 الملفات المدعومة:**
-    - **الصور:** JPG, JPEG, PNG, BMP
-    - **PDF:** متعدد الصفحات
+    4. **المشاكل الشائعة:**
+       - **النموذج قيد التحميل:** انتظر 30-60 ثانية
+       - **الحد المسموح:** قد تكون وصلت للحد المجاني
+       - **مشكلة في الاتصال:** تحقق من اتصال الإنترنت
+    
+    5. **بدائل:**
+       - جرب استخدام نماذج محلية
+       - استخدم خدمات OCR أخرى مثل Google Vision أو Azure Computer Vision
     """)
 
 # تذييل الصفحة
 st.markdown("---")
-st.caption("Powered by DeepSeek OCR & Hugging Face | تم التطوير للعمل على Streamlit Cloud")
+st.caption("Powered by Hugging Face Models | تم التطوير للعمل على Streamlit Cloud")
