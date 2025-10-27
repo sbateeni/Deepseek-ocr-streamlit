@@ -6,7 +6,6 @@ import io
 import fitz  # PyMuPDF
 import tempfile
 import os
-import base64
 import time
 
 # إعدادات الصفحة
@@ -17,21 +16,29 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# نماذج OCR محتملة مع معلوماتها
+# نماذج OCR مع endpoints الجديدة
 OCR_MODELS = {
     "Microsoft TrOCR Printed": {
-        "api_url": "https://api-inference.huggingface.co/models/microsoft/trocr-base-printed",
+        "model_id": "microsoft/trocr-base-printed",
         "description": "مناسب للنصوص المطبوعة"
     },
     "Microsoft TrOCR Handwritten": {
-        "api_url": "https://api-inference.huggingface.co/models/microsoft/trocr-base-handwritten", 
+        "model_id": "microsoft/trocr-base-handwritten", 
         "description": "مناسب للنصوص المكتوبة بخط اليد"
     },
     "Donut OCR": {
-        "api_url": "https://api-inference.huggingface.co/models/naver-clova-ix/donut-base-finetuned-cord-v2",
+        "model_id": "naver-clova-ix/donut-base-finetuned-cord-v2",
         "description": "نموذج متقدم للوثائق المنظمة"
+    },
+    "PaddleOCR En": {
+        "model_id": "paddlepaddle/paddleocr-en",
+        "description": "نموذج PaddleOCR للغة الإنجليزية"
     }
 }
+
+# قاعدة URL الجديدة
+HF_BASE_URL = "https://router.huggingface.co/hf-inference/"
+HF_STATUS_URL = "https://router.huggingface.co/hf-inference/status/"
 
 def init_session_state():
     """تهيئة حالة الجلسة"""
@@ -47,58 +54,59 @@ def init_session_state():
         st.session_state.last_check = None
 
 def get_api_url():
-    """الحصول على عنوان API للنموذج المحدد"""
+    """الحصول على عنوان API الجديد للنموذج المحدد"""
     model_info = OCR_MODELS.get(st.session_state.selected_model, OCR_MODELS["Microsoft TrOCR Printed"])
-    return model_info["api_url"]
+    model_id = model_info["model_id"]
+    return f"{HF_BASE_URL}models/{model_id}"
+
+def get_status_url():
+    """الحصول على عنوان حالة النموذج"""
+    model_info = OCR_MODELS.get(st.session_state.selected_model, OCR_MODELS["Microsoft TrOCR Printed"])
+    model_id = model_info["model_id"]
+    return f"{HF_STATUS_URL}{model_id}"
 
 def check_model_status():
-    """فحص حالة النموذج باستخدام طلب تجريبي"""
+    """فحص حالة النموذج باستخدام endpoint الجديد"""
     if not st.session_state.hf_token:
         return {"error": "⚠️ يرجى إدخال Hugging Face Token أولاً"}
     
-    api_url = get_api_url()
     headers = {"Authorization": f"Bearer {st.session_state.hf_token}"}
     
     try:
-        # إنشاء صورة تجريبية صغيرة (صورة 1x1 بكسل بيضاء)
-        img = Image.new('RGB', (1, 1), color='white')
-        img_bytes = io.BytesIO()
-        img.save(img_bytes, format='PNG')
-        img_bytes = img_bytes.getvalue()
-        
-        # إرسال طلب تجريبي
-        response = requests.post(api_url, headers=headers, data=img_bytes, timeout=30)
+        # فحص حالة النموذج باستخدام API الجديد
+        status_url = get_status_url()
+        response = requests.get(status_url, headers=headers, timeout=30)
         
         if response.status_code == 200:
-            return {
-                "status": "success", 
-                "message": "✅ النموذج جاهز للاستخدام",
-                "ready": True
-            }
-        elif response.status_code == 503:
-            # النموذج قيد التحميل - محاولة تحميله
-            load_response = requests.post(api_url, headers=headers, json={"inputs": ""}, timeout=30)
-            if load_response.status_code == 200:
+            status_data = response.json()
+            loaded = status_data.get('loaded', False)
+            state = status_data.get('state', 'Unknown')
+            
+            if loaded:
+                return {
+                    "status": "success", 
+                    "message": "✅ النموذج جاهز للاستخدام",
+                    "ready": True,
+                    "state": state
+                }
+            else:
                 return {
                     "status": "loading",
-                    "message": "🔄 النموذج قيد التحميل، يرجى الانتظار 20-30 ثانية",
-                    "ready": False
+                    "message": "🔄 النموذج قيد التحميل، يرجى استخدام زر تحميل النموذج",
+                    "ready": False,
+                    "state": state
                 }
+                
+        elif response.status_code == 404:
             return {
-                "status": "loading",
-                "message": "🔄 النموذج قيد التحميل، جاري التحميل التلقائي...",
+                "status": "error",
+                "message": "❌ النموذج غير موجود في النظام الجديد",
                 "ready": False
-            }
-        elif response.status_code == 422:
-            return {
-                "status": "ready",
-                "message": "✅ النموذج جاهز (يتوقع بيانات مختلفة)",
-                "ready": True
             }
         else:
             return {
                 "status": "error",
-                "message": f"❌ خطأ في API: {response.status_code}",
+                "message": f"❌ خطأ في التحقق: {response.status_code}",
                 "ready": False
             }
             
@@ -116,7 +124,7 @@ def check_model_status():
         }
 
 def force_load_model():
-    """إجبار تحميل النموذج"""
+    """إجبار تحميل النموذج باستخدام endpoint الجديد"""
     if not st.session_state.hf_token:
         return {"error": "⚠️ يرجى إدخال Hugging Face Token أولاً"}
     
@@ -124,18 +132,19 @@ def force_load_model():
     headers = {"Authorization": f"Bearer {st.session_state.hf_token}"}
     
     try:
-        # إرسال طلب لتحميل النموذج
-        response = requests.post(api_url, headers=headers, json={"inputs": "test"}, timeout=60)
+        # إرسال طلب تجريبي لتحميل النموذج
+        test_input = {"inputs": "test image data"}
+        response = requests.post(api_url, headers=headers, json=test_input, timeout=60)
         
         if response.status_code == 200:
             return {
                 "status": "success",
                 "message": "✅ تم تحميل النموذج بنجاح"
             }
-        elif response.status_code == 503:
+        elif response.status_code in [503, 422]:
             return {
                 "status": "loading", 
-                "message": "🔄 النموذج قيد التحميل، يرجى الانتظار..."
+                "message": "🔄 النموذج قيد التحميل، يرجى الانتظار 20-30 ثانية"
             }
         else:
             return {
@@ -150,7 +159,7 @@ def force_load_model():
         }
 
 def query_ocr_api(image_bytes):
-    """دالة لإرسال الصورة إلى OCR API"""
+    """دالة لإرسال الصورة إلى OCR API باستخدام endpoint الجديد"""
     if not st.session_state.hf_token:
         return {"error": "⚠️ يرجى إدخال Hugging Face Token أولاً"}
     
@@ -158,7 +167,9 @@ def query_ocr_api(image_bytes):
     api_url = get_api_url()
     
     try:
-        response = requests.post(api_url, headers=headers, data=image_bytes, timeout=60)
+        # استخدام multipart/form-data لإرسال الصورة
+        files = {'data': image_bytes}
+        response = requests.post(api_url, headers=headers, files=files, timeout=60)
         
         if response.status_code == 200:
             return response.json()
@@ -167,7 +178,7 @@ def query_ocr_api(image_bytes):
         elif response.status_code == 401:
             return {"error": "Token غير صالح أو منتهي الصلاحية"}
         elif response.status_code == 404:
-            return {"error": "النموذج غير متاح حالياً"}
+            return {"error": "النموذج غير متاح في النظام الجديد"}
         elif response.status_code == 422:
             return {"error": "تنسيق الصورة غير مدعوم أو هناك مشكلة في معالجة النموذج"}
         elif response.status_code == 429:
@@ -261,6 +272,7 @@ with st.sidebar:
     if st.session_state.selected_model in OCR_MODELS:
         model_info = OCR_MODELS[st.session_state.selected_model]
         st.caption(f"📝 {model_info['description']}")
+        st.caption(f"🔗 {model_info['model_id']}")
     
     st.markdown("---")
     
@@ -317,18 +329,17 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # معلومات سريعة
+    # معلومات عن النظام الجديد
     st.info("""
-    **نصائح سريعة:**
-    1. أدخل Token الصحيح
-    2. اختر النموذج المناسب
-    3. اضغط "تحميل النموذج" أولاً
-    4. انتظر حتى يصبح جاهزاً
+    **✨ النظام الجديد:**
+    - استخدام Inference Providers API
+    - endpoints محدثة
+    - دعم أفضل للنماذج
     """)
 
 # الواجهة الرئيسية
 st.title("🔍 نظام استخراج النص من الصور وPDF")
-st.write("استخدم نماذج Hugging Face المتاحة لاستخراج النص من الصور وملفات PDF")
+st.write("استخدم نماذج Hugging Face مع نظام Inference Providers الجديد")
 
 # عرض حالة النظام
 col1, col2, col3 = st.columns(3)
@@ -348,6 +359,14 @@ with col3:
         st.success("🔑 Token متوفر")
     else:
         st.error("🔑 Token مطلوب")
+
+# معلومات عن التحديث
+st.success("""
+**🔄 تم التحديث إلى نظام Hugging Face الجديد**
+- استخدام `router.huggingface.co/hf-inference/` بدلاً من `api-inference.huggingface.co`
+- دعم Inference Providers API
+- استمرارية أفضل للخدمة
+""")
 
 # تحذيرات
 if not st.session_state.hf_token:
@@ -427,6 +446,15 @@ if uploaded_file is not None and st.session_state.hf_token and st.session_state.
                                         key=f"text_{i}"
                                     )
                                     all_extracted_text.append(f"--- الصفحة {i+1} ---\n{extracted_text}\n")
+                            elif isinstance(result, dict) and 'text' in result:
+                                extracted_text = result['text']
+                                st.text_area(
+                                    f"النص من الصفحة {i+1}",
+                                    extracted_text,
+                                    height=150,
+                                    key=f"text_{i}"
+                                )
+                                all_extracted_text.append(f"--- الصفحة {i+1} ---\n{extracted_text}\n")
             
             if all_extracted_text:
                 st.subheader("📝 النص الكامل المستخرج")
@@ -468,44 +496,47 @@ if uploaded_file is not None and st.session_state.hf_token and st.session_state.
                 else:
                     st.success("✅ تم استخراج النص بنجاح!")
                     
+                    extracted_text = ""
                     if isinstance(result, list) and len(result) > 0:
                         extracted_text = result[0].get('generated_text', '')
-                        if extracted_text:
-                            st.text_area("النص المستخرج", extracted_text, height=200)
-                            
-                            st.download_button(
-                                label="📥 تحميل النص",
-                                data=extracted_text,
-                                file_name="النص_المستخرج.txt",
-                                mime="text/plain",
-                                use_container_width=True
-                            )
+                    elif isinstance(result, dict) and 'text' in result:
+                        extracted_text = result['text']
+                    
+                    if extracted_text:
+                        st.text_area("النص المستخرج", extracted_text, height=200)
+                        
+                        st.download_button(
+                            label="📥 تحميل النص",
+                            data=extracted_text,
+                            file_name="النص_المستخرج.txt",
+                            mime="text/plain",
+                            use_container_width=True
+                        )
 
-# قسم استكشاف الأخطاء
-with st.expander("🛠️ دليل استكشاف الأخطاء"):
+# قسم المعلومات
+with st.expander("ℹ️ معلومات عن النظام الجديد"):
     st.markdown("""
-    ### 🔧 إذا استمرت المشاكل:
+    ### 🚀 Hugging Face Inference Providers API الجديد
     
-    **1. مشكلة Token:**
-    - تأكد من أن الـ Token صالح ولم ينتهي
-    - تأكد من أن لديك صلاحيات Write
-    - جرب إنشاء Token جديد
+    **ما الجديد:**
+    - ✅ نظام serverless محسن
+    - ✅ وصول إلى المزيد من النماذج
+    - ✅ API موحد لجميع النماذج
+    - ✅ أداء أفضل وموثوقية أعلى
     
-    **2. مشكلة تحميل النموذج:**
-    - اضغط على "تحميل النموذج" وانتظر 30 ثانية
-    - افحص الحالة مرة أخرى بعد الانتظار
-    - جرب نموذجاً مختلفاً
+    **التغييرات:**
+    - 🔄 `api-inference.huggingface.co` → `router.huggingface.co/hf-inference/`
+    - 🔄 دعم أفضل لتنسيقات البيانات
+    - 🔄 إدارة محسنة للنماذج
     
-    **3. مشاكل في النتائج:**
-    - استخدم صوراً ذات جودة عالية
-    - تأكد من أن النص واضح في الصورة
-    - جرب معالجة الصورة مسبقاً
+    **الفوائد:**
+    - ⚡ استجابة أسرع
+    - 🔄 تحديثات تلقائية
+    - 📈 قابلة للتوسع بشكل أفضل
     
-    **4. بدائل:**
-    - جرب استخدام EasyOCR أو Tesseract محلياً
-    - استخدم خدمات سحابية مثل Google Vision API
+    للمزيد: [Inference Providers Documentation](https://huggingface.co/docs/inference-providers)
     """)
 
 # تذييل الصفحة
 st.markdown("---")
-st.caption("Powered by Hugging Face Models | تم التطوير للعمل على Streamlit Cloud")
+st.caption("Powered by Hugging Face Inference Providers API | تم التحديث للنظام الجديد")
