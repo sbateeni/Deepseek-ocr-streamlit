@@ -261,6 +261,13 @@ def _render_image_settings():
                 help="يحوّل الصورة لأبيض وأسود فقط",
                 key="binarize_check",
             )
+            
+            st.session_state.show_processed = st.checkbox(
+                "👁️ عرض الصورة المعالجة",
+                value=st.session_state.get("show_processed", False),
+                help="يعرض الصورة كما يراها محرك OCR",
+                key="show_processed_check",
+            )
 
         # زر إعادة الإعدادات الافتراضية
         if st.button("🔄 إعادة الافتراضي", key="reset_enhance_btn"):

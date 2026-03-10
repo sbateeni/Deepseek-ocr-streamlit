@@ -135,7 +135,24 @@ def _handle_image(uploaded_file):
 
     with col1:
         st.subheader("🖼️ الصورة")
-        st.image(image, use_container_width=True)
+        st.image(image, use_container_width=True, caption="الصورة الأصلية")
+        
+        # عرض الصورة المعالجة إذا مفعّل
+        if st.session_state.get("show_processed"):
+            st.markdown("---")
+            st.subheader("✨ المعالجة")
+            # نحاكي المعالجة للعرض
+            processed_preview = ImageProcessor.full_pipeline(
+                image.copy(),
+                contrast=st.session_state.contrast,
+                brightness=st.session_state.brightness,
+                sharpness=st.session_state.sharpness,
+                grayscale=st.session_state.grayscale,
+                denoise=st.session_state.denoise,
+                binarize=st.session_state.binarize,
+            )
+            st.image(processed_preview, use_container_width=True, caption="كيف يراها النظام")
+
         st.caption(
             f"الحجم: {image.size[0]}×{image.size[1]}px | "
             f"النوع: {image.mode}"

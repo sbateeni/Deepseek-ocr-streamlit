@@ -38,17 +38,10 @@ class TesseractOCR:
     ) -> dict:
         """
         استخراج النص من صورة باستخدام Tesseract
-
-        Args:
-            image: صورة PIL
-            lang: رمز اللغة (eng, ara, ara+eng, etc.)
-            psm: وضع تقسيم الصفحة (Page Segmentation Mode)
-            extra_config: إعدادات إضافية لـ Tesseract
-
-        Returns:
-            dict يحتوي على النص المستخرج ومعلومات إضافية
         """
-        config = f"--psm {psm} --oem 3 {extra_config}".strip()
+        # إضافة إعدادات الحفاظ على المسافات للجداول
+        hifi_config = "-c preserve_interword_spaces=1"
+        config = f"--psm {psm} --oem 3 {hifi_config} {extra_config}".strip()
 
         try:
             text = pytesseract.image_to_string(image, lang=lang, config=config)
