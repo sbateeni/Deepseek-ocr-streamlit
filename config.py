@@ -9,9 +9,10 @@ Application Settings & Constants
 TESSERACT_LANGUAGES = {
     "إنجليزي": "eng",
     "عربي": "ara",
-    "عربي + إنجليزي": "ara+eng",
     "عبري": "heb",
+    "عربي + إنجليزي": "ara+eng",
     "عبري + إنجليزي": "heb+eng",
+    "عربي + إنجليزي + عبري": "ara+eng+heb",
     "فرنسي": "fra",
     "إسباني": "spa",
     "ألماني": "deu",
