@@ -1,4 +1,5 @@
 tesseract-ocr
 tesseract-ocr-ara
 tesseract-ocr-eng
+tesseract-ocr-heb
 tesseract-ocr-fra
