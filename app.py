@@ -21,6 +21,7 @@ st.set_page_config(
 from utils.session import init_session_state
 from ui.sidebar import render_sidebar
 from ui.main_page import render_main_page
+from ui.img_to_pdf_page import render_img_to_pdf_page  # جديد
 from ui.components import render_status_bar
 
 
@@ -29,21 +30,32 @@ def main():
     # 1. تهيئة حالة الجلسة
     init_session_state()
 
-    # 2. رسم الشريط الجانبي
+    # 2. رسم الشريط الجانبي (الإعدادات العامة لم تظهر هنا بل في sidebar.py)
     render_sidebar()
 
-    # 3. شريط الحالة
-    render_status_bar()
-
-    # 4. الصفحة الرئيسية
-    render_main_page()
+    # 3. اختيار الصفحة (إما من الجلسة أو السحب المباشر)
+    with st.sidebar:
+        st.markdown("---")
+        st.subheader("📑 التنقل")
+        app_page = st.selectbox(
+            "اختر الصفحة",
+            ["🔍 استخراج النص (OCR)", "🖼️ تحويل الصور لـ PDF"],
+            key="navigation_selector"
+        )
+    
+    # 4. عرض الصفحة المختارة
+    if app_page == "🔍 استخراج النص (OCR)":
+        render_status_bar()
+        render_main_page()
+    else:
+        render_img_to_pdf_page()
 
     # 5. التذييل
     st.markdown("---")
     st.caption(
         "🔍 OCR System | "
         "Tesseract + HF Inference API | "
-        "يدعم العربية والإنجليزية"
+        "Image to PDF Tools"
     )
 
 

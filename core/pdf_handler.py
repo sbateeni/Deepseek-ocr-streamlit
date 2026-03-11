@@ -138,3 +138,44 @@ class PDFHandler:
         except Exception as e:
             logger.error(f"PDF info error: {e}")
             return {"error": str(e)}
+
+    @staticmethod
+    def images_to_pdf(images: list) -> bytes:
+        """
+        تحويل قائمة من صور PIL إلى ملف PDF واحد
+
+        Args:
+            images: قائمة من PIL.Image
+
+        Returns:
+            bytes: محتوى ملف PDF
+        """
+        if not images:
+            return None
+
+        try:
+            pdf_bytes = io.BytesIO()
+            
+            # تحويل جميع الصور لـ RGB (PDF يتطلب ذلك)
+            rgb_images = []
+            for img in images:
+                if img.mode != 'RGB':
+                    rgb_images.append(img.convert('RGB'))
+                else:
+                    rgb_images.append(img)
+            
+            # حفظ الصورة الأولى مع إلحاق الباقي كصفحات
+            if len(rgb_images) > 0:
+                rgb_images[0].save(
+                    pdf_bytes, 
+                    format="PDF", 
+                    save_all=True, 
+                    append_images=rgb_images[1:]
+                )
+            
+            logger.info(f"Converted {len(images)} images to PDF")
+            return pdf_bytes.getvalue()
+            
+        except Exception as e:
+            logger.error(f"Images to PDF conversion error: {e}")
+            return None
